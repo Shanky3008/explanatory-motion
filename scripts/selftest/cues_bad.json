@@ -1,0 +1,11 @@
+[
+ {"id": "early-tag", "kind": "tag", "text": "kettle", "start": 0.0, "end": 2.0},
+ {"id": "short-tag", "kind": "tag", "text": "steam", "start": 3.0, "end": 4.0},
+ {"id": "later-mention", "kind": "tag", "text": "steam", "occurrence": 2, "start": 6.0, "end": 8.0},
+ {"id": "crowd-a", "kind": "tag", "text": "rises", "start": 3.6, "end": 5.6},
+ {"id": "crowd-b", "kind": "tag", "text": "from", "start": 4.2, "end": 6.0},
+ {"id": "crowd-c", "kind": "tag", "text": "spout", "start": 4.7, "end": 6.5},
+ {"id": "missing-word", "kind": "tag", "text": "banana", "start": 1.0, "end": 3.0},
+ {"id": "early-sub", "kind": "subtitle", "text": "Steam rises from the spout", "start": 2.5, "end": 4.0},
+ {"id": "three-lines", "kind": "subtitle", "text": "and steam\ncools on the\nwindow.", "start": 5.8, "end": 9.0}
+]

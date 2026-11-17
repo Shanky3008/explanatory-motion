@@ -1,0 +1,11 @@
+[
+ {"word": "The", "start": 0.0, "end": 0.3}, {"word": "kettle", "start": 0.3, "end": 0.9},
+ {"word": "heats", "start": 0.9, "end": 1.4}, {"word": "the", "start": 1.4, "end": 1.6},
+ {"word": "water.", "start": 1.6, "end": 2.2},
+ {"word": "Steam", "start": 3.0, "end": 3.6}, {"word": "rises", "start": 3.6, "end": 4.2},
+ {"word": "from", "start": 4.2, "end": 4.5}, {"word": "the", "start": 4.5, "end": 4.7},
+ {"word": "spout", "start": 4.7, "end": 5.3},
+ {"word": "and", "start": 5.8, "end": 6.0}, {"word": "steam", "start": 6.0, "end": 6.6},
+ {"word": "cools", "start": 6.6, "end": 7.2}, {"word": "on", "start": 7.2, "end": 7.4},
+ {"word": "the", "start": 7.4, "end": 7.6}, {"word": "window.", "start": 7.6, "end": 8.3}
+]

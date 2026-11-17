@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Camera move, before (wrong)</title>
+<style>
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; color:#14233b; background:#f6f8fb; }
+  main { max-width: 980px; margin: 0 auto; padding: 12px 16px 24px; }
+  h1 { font-size: 1.1rem; margin: 8px 0; }
+  #stage { width:100%; aspect-ratio:16/9; display:block; background:#fff; border:1px solid #d5dbe5; border-radius:10px; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+  button { font:inherit; padding:8px 14px; min-height:44px; border-radius:8px; border:1px solid #9aa8bd; background:#fff; color:#14233b; cursor:pointer; }
+  button:focus-visible { outline:3px solid #1f6fb5; outline-offset:2px; }
+  #readout { font:14px ui-monospace, Consolas, monospace; }
+  #graph { width:100%; height:90px; background:#fff; border:1px solid #d5dbe5; border-radius:8px; }
+  #note { font-size:.85rem; color:#41506a; }
+</style>
+</head>
+<body>
+<main>
+<h1>Camera from the whole scene to the wheel (before: do not copy)</h1>
+<svg id="stage" viewBox="0 0 1600 900" role="img" aria-label="A pulley lifting a weight; the camera moves in on the wheel">
+  <g id="world"></g>
+  <g id="guides" style="display:none"></g>
+</svg>
+<div class="bar">
+  <button id="replay" type="button">Replay</button>
+  <button id="play" type="button" aria-pressed="true">Pause</button>
+  <label><input id="guideBox" type="checkbox"> show guides (safe band, subject box)</label>
+</div>
+<p id="readout" aria-live="off"></p>
+<svg id="graph" viewBox="0 0 600 90" aria-label="Camera speed over time"></svg>
+<p id="note"></p>
+</main>
+<script>
+// ---- helpers: the block below is a generated copy of scripts/easing.mjs (node scripts/sync_easing.mjs) ----
+// <easing-inline> (generated from scripts/easing.mjs by scripts/sync_easing.mjs: do not edit by hand)
+// easing.mjs - curves, duration rules, strobing check and camera clearance check.
+// Plain ES module, no dependencies. Import in node or in a browser page served over http.
+// Rules and reasons: references/timing-easing.md and references/camera.md.
+
+const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
+
+// ---- curves: each maps t in [0,1] to progress in [0,1] -------------------
+const linear = (t) => t;
+const smoothstep = (t) => { t = clamp(t); return t * t * (3 - 2 * t); };
+const smootherstep = (t) => { t = clamp(t); return t * t * t * (t * (6 * t - 15) + 10); };
+const easeInOutCubic = (t) => { t = clamp(t); return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+
+// CSS-style cubic-bezier(x1, y1, x2, y2), solved for x by Newton steps with a bisection fallback.
+function cubicBezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const X = (s) => ((ax * s + bx) * s + cx) * s;
+  const Y = (s) => ((ay * s + by) * s + cy) * s;
+  const dX = (s) => (3 * ax * s + 2 * bx) * s + cx;
+  return (t) => {
+    t = clamp(t);
+    let s = t;
+    for (let i = 0; i < 8; i++) {
+      const err = X(s) - t;
+      if (Math.abs(err) < 1e-7) return Y(s);
+      const d = dX(s);
+      if (Math.abs(d) < 1e-6) break;
+      s -= err / d;
+    }
+    let lo = 0, hi = 1; s = t;
+    for (let i = 0; i < 40; i++) { const e = X(s) - t; if (Math.abs(e) < 1e-7) break; if (e > 0) hi = s; else lo = s; s = (lo + hi) / 2; }
+    return Y(s);
+  };
+}
+
+// Named curves used by this skill (see the table in timing-easing.md).
+const EASE = {
+  glide: cubicBezier(0.4, 0, 0.2, 1),   // on-screen move from A to B
+  arrive: cubicBezier(0, 0, 0.2, 1),    // entrance
+  leave: cubicBezier(0.4, 0, 1, 1),     // exit
+  settle: cubicBezier(0.2, 0, 0, 1),    // strong landing
+  smooth: smoothstep,
+  linear,
+};
+
+// ---- how long: duration from travel ---------------------------------------
+const KINDS = { ui: [0.15, 0.60], scene: [0.40, 2.00], camera: [0.40, 2.40] };
+// travel fraction f = distance / reference span (viewport diagonal for ui, frame width for scene and camera).
+function travelSeconds(f, kind = 'ui') {
+  const [lo, hi] = KINDS[kind] || KINDS.ui;
+  return lo + (hi - lo) * Math.pow(clamp(f), 0.6);
+}
+const exitSeconds = (enterSeconds) => enterSeconds * 0.65;
+
+// ---- how long text stays ----------------------------------------------------
+const WPS = { adult: 3.0, mixed: 2.5, learner: 2.0 };
+function readingSeconds(words, audience = 'mixed') {
+  const wps = typeof audience === 'number' ? audience : (WPS[audience] || WPS.mixed);
+  return Math.max(1.2, 0.6 + words / wps);
+}
+const countWords = (s) => (String(s).trim().match(/\S+/g) || []).length;
+
+// ---- peak speed of a curve relative to its average speed -------------------
+function peakSpeedRatio(fn, n = 2000) {
+  let m = 0;
+  for (let i = 0; i < n; i++) m = Math.max(m, (fn((i + 1) / n) - fn(i / n)) * n);
+  return m;
+}
+
+// ---- strobing of repeating patterns ----------------------------------------
+// speed and spacing in the same length unit, speed per second.
+function aliasStep(speed, spacing, fps = 30) {
+  const perFrame = speed / (fps * spacing);
+  const frac = Math.round((perFrame - Math.floor(perFrame)) * 1e6) / 1e6;
+  let verdict;
+  if (perFrame < 1 / 3) verdict = 'ok: slow enough to follow';
+  else if (frac < 0.05 || frac > 0.95) verdict = 'bad: pattern looks frozen';
+  else if (frac >= 0.7) verdict = 'bad: pattern may look as if it runs backward';
+  else if (frac > 0.3) verdict = 'bad: flicker (fraction near one half)';
+  else verdict = 'ok: drifts slowly forward';
+  return { perFrame, fraction: frac, verdict, ok: verdict.startsWith('ok') };
+}
+
+// ---- camera clearance --------------------------------------------------------
+// pathFn(t) -> [x, y, z] for t in [0, duration]; boxes: [{min:[x,y,z], max:[x,y,z]}] (solid things, walls as thin boxes).
+// Samples at hz; fails when the camera sphere (radius + margin) touches a box.
+function pathClearance(pathFn, boxes, { duration = 1, hz = 10, radius = 0.1, margin = 0.2 } = {}) {
+  const hits = []; let minDistance = Infinity;
+  const n = Math.max(1, Math.ceil(duration * hz));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * duration; const p = pathFn(t);
+    boxes.forEach((b, k) => {
+      let d2 = 0;
+      for (let a = 0; a < 3; a++) { const v = p[a]; const d = v < b.min[a] ? b.min[a] - v : v > b.max[a] ? v - b.max[a] : 0; d2 += d * d; }
+      const d = Math.sqrt(d2); minDistance = Math.min(minDistance, d);
+      if (d < radius + margin) hits.push({ t: Math.round(t * 1000) / 1000, box: k, distance: Math.round(d * 1000) / 1000 });
+    });
+  }
+  return { ok: hits.length === 0, hits, minDistance };
+}
+
+// Convenience: interpolate a value along a move with a curve.
+const lerp = (a, b, u) => a + (b - a) * u;
+function tween(from, to, seconds, curve = EASE.glide) {
+  return (t) => lerp(from, to, curve(clamp(t / seconds)));
+}
+
+// ---- camera keep-in -----------------------------------------------------------
+// pathFn(t) -> [x, y, z]; box: {min:[x,y,z], max:[x,y,z]} is the set the camera must stay inside (a room's shell, shrunk by
+// the margin you want). Fails when the camera sphere (radius) leaves the box at any sample: the "camera outside the room" fault.
+function pathInside(pathFn, box, { duration = 1, hz = 10, radius = 0.1 } = {}) {
+  const hits = [];
+  const n = Math.max(1, Math.ceil(duration * hz));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * duration; const p = pathFn(t);
+    for (let a = 0; a < 3; a++) {
+      if (p[a] - radius < box.min[a] || p[a] + radius > box.max[a]) { hits.push({ t: Math.round(t * 1000) / 1000, axis: 'xyz'[a] }); break; }
+    }
+  }
+  return { ok: hits.length === 0, hits };
+}
+// </easing-inline>
+const smooth = EASE.smooth;                                          // symmetric ease, peak speed 1.5 x average
+
+// ---- the shot, written as numbers ----
+const WIDE   = { cx: 800, cy: 450, w: 1600 };                    // establishing: the whole set
+const SUBJECT = { x0: 715, y0: 130, x1: 885, y1: 300 };            // bounding box of the wheel and its bracket
+const FILL = 0.62;                                               // subject takes 62 % of the frame height
+const closeH = (SUBJECT.y1 - SUBJECT.y0) / FILL, closeW = closeH * 16 / 9;
+const CLOSE  = { cx: 800, cy: 330, w: 300 };                    // aimed at the middle of the rope, not at the wheel
+const HOLD_IN = 0.4;                                             // barely a look at the whole scene
+const MOVE = 0.45;                                               // a whip: far too fast for a zoom this big
+const HOLD_OUT = 1.0;                                            // then a jump cut back to the start
+const TAG_AT = -1, TOTAL = HOLD_IN + MOVE + HOLD_OUT;
+
+function progress(t) { return clamp((t - HOLD_IN) / MOVE); }          // linear: starts and stops dead
+function camera(t) {
+  const p = progress(t);
+  const drift = 1;                                                           // frozen frame while holding
+  // width interpolated linearly: most of the zoom happens in the last moments
+  const w = lerp(WIDE.w * drift, CLOSE.w, p);
+  return { cx: lerp(WIDE.cx, CLOSE.cx, p), cy: lerp(WIDE.cy, CLOSE.cy, p), w };
+}
+
+// ---- the world ----
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, a = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); if (parent) parent.appendChild(e); return e; };
+const world = document.getElementById('world');
+el('rect', { x: 0, y: 0, width: 1600, height: 900, fill: '#eef2f8' }, world);
+el('rect', { x: 0, y: 760, width: 1600, height: 140, fill: '#cfd6e2' }, world);
+el('rect', { x: 1250, y: 200, width: 220, height: 240, fill: '#cfe6f7', stroke: '#5c6f8c', 'stroke-width': 8 }, world);   // window (distractor)
+el('rect', { x: 250, y: 640, width: 170, height: 120, fill: '#c9a46a', stroke: '#7a5a28', 'stroke-width': 6 }, world);    // crate (distractor)
+el('rect', { x: 560, y: 90, width: 480, height: 40, fill: '#7d8798', stroke: '#2a3447', 'stroke-width': 5 }, world);      // beam
+el('rect', { x: 788, y: 128, width: 24, height: 100, fill: '#7d8798', stroke: '#2a3447', 'stroke-width': 4 }, world);     // bracket
+el('path', { d: 'M730 230 L730 620', stroke: '#6b4a1e', 'stroke-width': 8, fill: 'none' }, world);                        // rope, weight side
+el('path', { d: 'M870 230 L870 600', stroke: '#6b4a1e', 'stroke-width': 8, fill: 'none' }, world);                        // rope, pull side
+el('circle', { cx: 800, cy: 230, r: 70, fill: '#f2b233', stroke: '#8a5a00', 'stroke-width': 8 }, world);                  // the wheel
+el('circle', { cx: 800, cy: 230, r: 12, fill: '#8a5a00' }, world);
+el('rect', { x: 680, y: 620, width: 100, height: 110, rx: 6, fill: '#5c6f8c', stroke: '#2a3447', 'stroke-width': 6 }, world); // weight
+el('circle', { cx: 870, cy: 612, r: 26, fill: '#e8b9a0', stroke: '#8a5a40', 'stroke-width': 5 }, world);                  // hand
+const tag = el('g', { opacity: 1 }, world);   // the tag sits on the side with room inside the CLOSE frame (x 556 to 1044), not the right
+el('rect', { x: 585, y: 150, width: 125, height: 38, rx: 9, fill: '#fff', stroke: '#14233b', 'stroke-width': 3 }, tag);
+const tx = el('text', { x: 600, y: 177, 'font-size': 22, 'font-weight': 700, fill: '#14233b', 'font-family': 'system-ui, sans-serif' }, tag); tx.textContent = 'WHEEL';
+el('path', { d: 'M710 169 L748 205', stroke: '#14233b', 'stroke-width': 3 }, tag);
+
+// ---- run ----
+const stage = document.getElementById('stage'), guides = document.getElementById('guides');
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+let t = 0, playing = !reduce.matches;
+function view(t) {
+  const c = reduce.matches ? CLOSE : camera(t);                    // reduced motion: cut straight to the close shot
+  const w = c.w, h = w * 9 / 16;
+  return { x0: c.cx - w / 2, y0: c.cy - h / 2, w, h };
+}
+function draw() {
+  const v = view(t);
+  stage.setAttribute('viewBox', `${v.x0} ${v.y0} ${v.w} ${v.h}`);
+  tag.setAttribute('opacity', 1);                                 // the tag is there from the first frame, before anyone knows what a wheel is
+  const fillW = (SUBJECT.x1 - SUBJECT.x0) / v.w, fillH = (SUBJECT.y1 - SUBJECT.y0) / v.h;
+  document.getElementById('readout').textContent = `t ${t.toFixed(2)} s   view width ${v.w.toFixed(0)}   subject fills ${(fillW * 100).toFixed(0)} % of width, ${(fillH * 100).toFixed(0)} % of height`;
+  guides.innerHTML = '';
+  if (document.getElementById('guideBox').checked) {
+    const s = v.w / 1600;
+    el('rect', { x: v.x0, y: v.y0 + 0.08 * v.h, width: v.w, height: 0.74 * v.h, fill: 'none', stroke: '#c0392b', 'stroke-width': 3 * s, 'stroke-dasharray': `${12 * s} ${8 * s}` }, guides);
+    el('rect', { x: SUBJECT.x0, y: SUBJECT.y0, width: SUBJECT.x1 - SUBJECT.x0, height: SUBJECT.y1 - SUBJECT.y0, fill: 'none', stroke: '#2e8b57', 'stroke-width': 4 * s }, guides);
+  }
+  guides.style.display = document.getElementById('guideBox').checked ? '' : 'none';
+}
+// speed graph: d(progress)/dt, drawn from the same function: a bell, not a box
+(function graph() {
+  const g = document.getElementById('graph'); const pts = []; let peak = 0;
+  for (let i = 0; i <= 300; i++) { const tt = (i / 300) * TOTAL, d = (progress(tt + 0.01) - progress(tt)) / 0.01; peak = Math.max(peak, d); pts.push([i * 2, d]); }
+  el('polyline', { points: pts.map(([x, d]) => `${x},${80 - 70 * d / (peak * 1.1)}`).join(' '), fill: 'none', stroke: '#1f6fb5', 'stroke-width': 3 }, g);
+  const l = el('line', { x1: 0, x2: 0, y1: 0, y2: 90, stroke: '#c0392b', 'stroke-width': 2, id: 'cursor' }, g);
+  const tx = el('text', { x: 6, y: 14, 'font-size': 12, fill: '#41506a' }, g); tx.textContent = `camera speed over ${TOTAL.toFixed(1)} s (a box: starts and stops dead, peak ${(peak * MOVE).toFixed(2)} x average)`;
+})();
+const q = new URLSearchParams(location.search);
+if (q.has('t')) { t = q.get('t') === 'end' ? TOTAL : parseFloat(q.get('t')) || 0; playing = false; }
+if (q.get('guides') === '1') document.getElementById('guideBox').checked = true;
+if (reduce.matches) { t = TOTAL; document.getElementById('note').textContent = 'Reduced motion: the camera cuts to the close shot with no move.'; }
+else document.getElementById('note').textContent = 'Faults: no hold on the wide shot, 0.45 s linear zoom, aimed at the rope so the wheel is cut off, label shown from the first frame, loops with a jump cut. Switch on the guides to see the subject box miss the safe band.';
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (playing) { t += dt; if (t >= TOTAL) t = 0; }                  // loops with a jump cut
+  draw(); document.getElementById('cursor').setAttribute('x1', (t / TOTAL) * 600), document.getElementById('cursor').setAttribute('x2', (t / TOTAL) * 600);
+  document.getElementById('play').textContent = playing ? 'Pause' : 'Play'; document.getElementById('play').setAttribute('aria-pressed', String(playing));
+  requestAnimationFrame(frame);
+}
+document.getElementById('replay').onclick = () => { t = 0; playing = !reduce.matches; };
+document.getElementById('play').onclick = () => { if (t >= TOTAL) t = 0; playing = !playing; };
+document.getElementById('guideBox').onchange = draw;
+window.__ready = true;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

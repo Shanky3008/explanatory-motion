@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guided path, before (wrong)</title>
+<style>
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; color:#222; background:#f6f8fb; }
+  main { max-width: 980px; margin: 0 auto; padding: 12px 16px 24px; }
+  h1 { font-size: 1.1rem; margin: 8px 0; }
+  svg { width:100%; height:auto; display:block; background:#fff; border:1px solid #d5dbe5; border-radius:10px; }
+  .faults { font-size:.9rem; color:#6b1b1b; background:#fff3f3; border:1px solid #e3b4b4; border-radius:8px; padding:8px 12px; }
+  text.tiny { font:10px sans-serif; fill:#8a8a8a; }
+</style>
+</head>
+<body>
+<main>
+<h1>The water cycle, everything at once (before: do not copy)</h1>
+<svg id="pic" viewBox="0 0 960 600" aria-label="Water cycle, unordered">
+  <rect x="0" y="470" width="470" height="130" fill="#bcd9f2"/>
+  <path d="M470 600 L470 500 C520 480 540 420 580 380 C620 340 660 330 700 330 C800 330 860 390 960 400 L960 600 Z" fill="#cdd8b0" stroke="#7c8c57" stroke-width="3"/>
+  <circle cx="110" cy="100" r="44" fill="#f2b233"/>
+  <path d="M430 130 C405 130 405 95 435 95 C435 65 480 55 500 77 C525 57 570 67 570 100 C600 100 600 130 570 130 Z" fill="#e8eef6" stroke="#5c6f8c" stroke-width="3"/>
+  <g id="flows" fill="none" stroke-width="7" stroke-linecap="round">
+    <path d="M150 140 C 180 230, 190 330, 215 440" stroke="#d63a2f"/>
+    <path d="M300 450 C 320 360, 340 270, 390 200" stroke="#2fa24a"/>
+    <path d="M560 215 C 575 255, 590 290, 600 330" stroke="#2fa24a"/>
+    <path d="M590 400 C 560 440, 500 480, 450 505" stroke="#d63a2f"/>
+  </g>
+  <!-- faults: no numbers, no order, no arrowheads, labels tiny and sitting on top of the picture -->
+  <text class="tiny" x="175" y="300">heat</text>
+  <text class="tiny" x="290" y="330">vapour</text>
+  <text class="tiny" x="455" y="115">cloud</text>
+  <text class="tiny" x="585" y="285">rain</text>
+  <text class="tiny" x="540" y="430">runoff</text>
+  <text class="tiny" x="590" y="300">precipitation</text>
+</svg>
+<p class="faults"><strong>What is wrong, in order of damage:</strong>
+  everything is on screen at once and nothing says where to start; no numbers, no arrowheads, so direction is a guess;
+  red and green carry the difference (about 1 viewer in 12 cannot separate them) and neither means anything here;
+  the vapour arrow looks like the rain arrow (a gas drawn as a liquid); labels are 10 px grey on a busy picture, two
+  of them printed over each other; every arrow pulses together, so motion is noise instead of sequence.
+  Compare with <code>after.html</code>.</p>
+<script>
+// everything pulses together, linearly: motion with no meaning
+const flows = document.getElementById('flows');
+const q = new URLSearchParams(location.search);
+const fixed = q.has('t') ? parseFloat(q.get('t')) : null;
+function tick(now) { const s = fixed !== null ? fixed : now / 1000; flows.style.opacity = 0.55 + 0.45 * Math.abs(((s % 1) * 2) - 1); if (fixed === null) requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+window.__ready = true;
+</script>
+</main>
+</body>
+</html>

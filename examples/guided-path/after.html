@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guided path, after (right)</title>
+<style>
+  :root { --ground:#f6f8fb; --ink:#14233b; --water:#1f6fb5; --heat:#e08a00; --land:#cdd8b0; --land-line:#7c8c57; --card:#ffffff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:16px/1.4 system-ui, sans-serif; color:var(--ink); background:var(--ground); }
+  main { max-width: 980px; margin: 0 auto; padding: 12px 16px 24px; }
+  h1 { font-size: 1.1rem; margin: 8px 0; }
+  svg { width:100%; height:auto; display:block; background:#fff; border:1px solid #d5dbe5; border-radius:10px; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0; }
+  button { font:inherit; padding:8px 14px; min-height:44px; border-radius:8px; border:1px solid #9aa8bd; background:var(--card); color:var(--ink); cursor:pointer; }
+  button:focus-visible { outline:3px solid #1f6fb5; outline-offset:2px; }
+  #caption { min-height: 3.2em; font-size:1.15rem; padding:10px 12px; background:#fff; border:1px solid #d5dbe5; border-radius:8px; }
+  #note { font-size:.85rem; color:#41506a; }
+  .lbl rect { fill:#fff; stroke:var(--ink); stroke-width:1.5; }
+  .lbl text { font:700 15px system-ui, sans-serif; fill:var(--ink); letter-spacing:.04em; }
+  .badge text { font:700 17px system-ui, sans-serif; fill:#fff; text-anchor:middle; dominant-baseline:central; }
+</style>
+</head>
+<body>
+<main>
+<h1>The water cycle: five steps, one path (after)</h1>
+<svg id="pic" viewBox="0 0 960 600" role="img" aria-labelledby="pic-title pic-desc">
+  <title id="pic-title">Water cycle in five numbered steps</title>
+  <desc id="pic-desc">Sun warms the sea, vapour rises, cools into cloud, rain falls on land, water runs back to the sea. Simplified and not to scale.</desc>
+  <g id="scene"></g>
+  <text x="940" y="588" text-anchor="end" font-size="13" fill="#41506a">Simplified. Not to scale.</text>
+</svg>
+<div class="bar">
+  <button id="prev" type="button">Previous</button>
+  <button id="play" type="button" aria-pressed="true">Pause</button>
+  <button id="next" type="button">Next</button>
+  <button id="all" type="button" aria-pressed="false">Show all steps</button>
+</div>
+<p id="caption" aria-live="polite"></p>
+<p id="note"></p>
+</main>
+<script>
+// ---- timing rules: the block below is a generated copy of scripts/easing.mjs (node scripts/sync_easing.mjs),
+// inlined so this page needs no network and no module loading ----
+// <easing-inline> (generated from scripts/easing.mjs by scripts/sync_easing.mjs: do not edit by hand)
+// easing.mjs - curves, duration rules, strobing check and camera clearance check.
+// Plain ES module, no dependencies. Import in node or in a browser page served over http.
+// Rules and reasons: references/timing-easing.md and references/camera.md.
+
+const clamp = (x, lo = 0, hi = 1) => Math.min(hi, Math.max(lo, x));
+
+// ---- curves: each maps t in [0,1] to progress in [0,1] -------------------
+const linear = (t) => t;
+const smoothstep = (t) => { t = clamp(t); return t * t * (3 - 2 * t); };
+const smootherstep = (t) => { t = clamp(t); return t * t * t * (t * (6 * t - 15) + 10); };
+const easeInOutCubic = (t) => { t = clamp(t); return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+
+// CSS-style cubic-bezier(x1, y1, x2, y2), solved for x by Newton steps with a bisection fallback.
+function cubicBezier(x1, y1, x2, y2) {
+  const cx = 3 * x1, bx = 3 * (x2 - x1) - cx, ax = 1 - cx - bx;
+  const cy = 3 * y1, by = 3 * (y2 - y1) - cy, ay = 1 - cy - by;
+  const X = (s) => ((ax * s + bx) * s + cx) * s;
+  const Y = (s) => ((ay * s + by) * s + cy) * s;
+  const dX = (s) => (3 * ax * s + 2 * bx) * s + cx;
+  return (t) => {
+    t = clamp(t);
+    let s = t;
+    for (let i = 0; i < 8; i++) {
+      const err = X(s) - t;
+      if (Math.abs(err) < 1e-7) return Y(s);
+      const d = dX(s);
+      if (Math.abs(d) < 1e-6) break;
+      s -= err / d;
+    }
+    let lo = 0, hi = 1; s = t;
+    for (let i = 0; i < 40; i++) { const e = X(s) - t; if (Math.abs(e) < 1e-7) break; if (e > 0) hi = s; else lo = s; s = (lo + hi) / 2; }
+    return Y(s);
+  };
+}
+
+// Named curves used by this skill (see the table in timing-easing.md).
+const EASE = {
+  glide: cubicBezier(0.4, 0, 0.2, 1),   // on-screen move from A to B
+  arrive: cubicBezier(0, 0, 0.2, 1),    // entrance
+  leave: cubicBezier(0.4, 0, 1, 1),     // exit
+  settle: cubicBezier(0.2, 0, 0, 1),    // strong landing
+  smooth: smoothstep,
+  linear,
+};
+
+// ---- how long: duration from travel ---------------------------------------
+const KINDS = { ui: [0.15, 0.60], scene: [0.40, 2.00], camera: [0.40, 2.40] };
+// travel fraction f = distance / reference span (viewport diagonal for ui, frame width for scene and camera).
+function travelSeconds(f, kind = 'ui') {
+  const [lo, hi] = KINDS[kind] || KINDS.ui;
+  return lo + (hi - lo) * Math.pow(clamp(f), 0.6);
+}
+const exitSeconds = (enterSeconds) => enterSeconds * 0.65;
+
+// ---- how long text stays ----------------------------------------------------
+const WPS = { adult: 3.0, mixed: 2.5, learner: 2.0 };
+function readingSeconds(words, audience = 'mixed') {
+  const wps = typeof audience === 'number' ? audience : (WPS[audience] || WPS.mixed);
+  return Math.max(1.2, 0.6 + words / wps);
+}
+const countWords = (s) => (String(s).trim().match(/\S+/g) || []).length;
+
+// ---- peak speed of a curve relative to its average speed -------------------
+function peakSpeedRatio(fn, n = 2000) {
+  let m = 0;
+  for (let i = 0; i < n; i++) m = Math.max(m, (fn((i + 1) / n) - fn(i / n)) * n);
+  return m;
+}
+
+// ---- strobing of repeating patterns ----------------------------------------
+// speed and spacing in the same length unit, speed per second.
+function aliasStep(speed, spacing, fps = 30) {
+  const perFrame = speed / (fps * spacing);
+  const frac = Math.round((perFrame - Math.floor(perFrame)) * 1e6) / 1e6;
+  let verdict;
+  if (perFrame < 1 / 3) verdict = 'ok: slow enough to follow';
+  else if (frac < 0.05 || frac > 0.95) verdict = 'bad: pattern looks frozen';
+  else if (frac >= 0.7) verdict = 'bad: pattern may look as if it runs backward';
+  else if (frac > 0.3) verdict = 'bad: flicker (fraction near one half)';
+  else verdict = 'ok: drifts slowly forward';
+  return { perFrame, fraction: frac, verdict, ok: verdict.startsWith('ok') };
+}
+
+// ---- camera clearance --------------------------------------------------------
+// pathFn(t) -> [x, y, z] for t in [0, duration]; boxes: [{min:[x,y,z], max:[x,y,z]}] (solid things, walls as thin boxes).
+// Samples at hz; fails when the camera sphere (radius + margin) touches a box.
+function pathClearance(pathFn, boxes, { duration = 1, hz = 10, radius = 0.1, margin = 0.2 } = {}) {
+  const hits = []; let minDistance = Infinity;
+  const n = Math.max(1, Math.ceil(duration * hz));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * duration; const p = pathFn(t);
+    boxes.forEach((b, k) => {
+      let d2 = 0;
+      for (let a = 0; a < 3; a++) { const v = p[a]; const d = v < b.min[a] ? b.min[a] - v : v > b.max[a] ? v - b.max[a] : 0; d2 += d * d; }
+      const d = Math.sqrt(d2); minDistance = Math.min(minDistance, d);
+      if (d < radius + margin) hits.push({ t: Math.round(t * 1000) / 1000, box: k, distance: Math.round(d * 1000) / 1000 });
+    });
+  }
+  return { ok: hits.length === 0, hits, minDistance };
+}
+
+// Convenience: interpolate a value along a move with a curve.
+const lerp = (a, b, u) => a + (b - a) * u;
+function tween(from, to, seconds, curve = EASE.glide) {
+  return (t) => lerp(from, to, curve(clamp(t / seconds)));
+}
+
+// ---- camera keep-in -----------------------------------------------------------
+// pathFn(t) -> [x, y, z]; box: {min:[x,y,z], max:[x,y,z]} is the set the camera must stay inside (a room's shell, shrunk by
+// the margin you want). Fails when the camera sphere (radius) leaves the box at any sample: the "camera outside the room" fault.
+function pathInside(pathFn, box, { duration = 1, hz = 10, radius = 0.1 } = {}) {
+  const hits = [];
+  const n = Math.max(1, Math.ceil(duration * hz));
+  for (let i = 0; i <= n; i++) {
+    const t = (i / n) * duration; const p = pathFn(t);
+    for (let a = 0; a < 3; a++) {
+      if (p[a] - radius < box.min[a] || p[a] + radius > box.max[a]) { hits.push({ t: Math.round(t * 1000) / 1000, axis: 'xyz'[a] }); break; }
+    }
+  }
+  return { ok: hits.length === 0, hits };
+}
+// </easing-inline>
+const smooth = EASE.smooth;
+
+// ---- content: one palette, one meaning per hue: amber = heat, blue = water (solid = liquid, dashed = vapour), grey = cloud, a neutral ----
+const STEPS = [
+  { n: 1, label: 'SUN WARMS SEA',  text: 'The Sun warms the sea.',                       colour: '#e08a00', path: 'M150 140 C 180 230, 190 330, 215 440', dashed: false, box: [225, 215] },
+  { n: 2, label: 'VAPOUR RISES',   text: 'Warm water rises as vapour.',                  colour: '#1f6fb5', path: 'M300 450 C 320 360, 340 270, 390 200',  dashed: true,  box: [385, 330] },
+  { n: 3, label: 'CLOUD FORMS',    text: 'High up, the vapour cools into a cloud.',      colour: '#5f6b7a', path: 'M395 168 C 430 150, 455 150, 480 150', dashed: false, box: [380, 70]  },
+  { n: 4, label: 'RAIN FALLS',     text: 'Water falls as rain on the land.',             colour: '#1f6fb5', path: 'M560 215 C 575 255, 590 290, 600 330', dashed: false, box: [660, 245] },
+  { n: 5, label: 'RUNS TO SEA',    text: 'Rivers carry the water back to the sea.',      colour: '#1f6fb5', path: 'M590 400 C 560 440, 500 480, 450 505', dashed: false, box: [640, 440] },
+];
+const NS = 'http://www.w3.org/2000/svg';
+const el = (tag, attrs = {}, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+
+const scene = document.getElementById('scene');
+// static ground: sea, land, sun, cloud (the things being explained; not part of the path layers)
+el('rect', { x: 0, y: 470, width: 470, height: 130, fill: '#bcd9f2' }, scene);
+el('path', { d: 'M470 600 L470 500 C520 480 540 420 580 380 C620 340 660 330 700 330 C800 330 860 390 960 400 L960 600 Z', fill: '#cdd8b0', stroke: '#7c8c57', 'stroke-width': 3 }, scene);
+el('circle', { cx: 110, cy: 100, r: 44, fill: '#f2b233', stroke: '#b97a00', 'stroke-width': 3 }, scene);
+const cloud = el('g', { transform: 'translate(500 130)' }, scene);
+el('path', { d: 'M-70 25 C-95 25 -95 -10 -65 -10 C-65 -40 -20 -50 0 -28 C25 -48 70 -38 70 -5 C100 -5 100 25 70 25 Z', fill: '#eceff3', stroke: '#5f6b7a', 'stroke-width': 3 }, cloud);
+
+const parts = STEPS.map((s) => {
+  const g = el('g', {}, scene);
+  const path = el('path', { d: s.path, fill: 'none', stroke: s.colour, 'stroke-width': 7, 'stroke-linecap': 'round', pathLength: 1, 'stroke-dasharray': s.dashed ? '0.02 0.03' : '1 1' }, g);
+  let maskPath = null;
+  if (s.dashed) {   // reveal a dashed arrow from its tail through a mask that draws itself
+    const m = el('mask', { id: 'm' + s.n, maskUnits: 'userSpaceOnUse', x: 0, y: 0, width: 960, height: 600 }, g);
+    maskPath = el('path', { d: s.path, fill: 'none', stroke: '#fff', 'stroke-width': 24, pathLength: 1, 'stroke-dasharray': '1 1', 'stroke-dashoffset': 1 }, m);
+    path.setAttribute('mask', 'url(#m' + s.n + ')');
+  }
+  const L = path.getTotalLength();
+  const end = path.getPointAtLength(L), pre = path.getPointAtLength(L - 3);
+  const ang = Math.atan2(end.y - pre.y, end.x - pre.x) * 180 / Math.PI;
+  const head = el('path', { d: 'M-14 -10 L6 0 L-14 10 Z', fill: s.colour, transform: `translate(${end.x} ${end.y}) rotate(${ang})` }, g);
+  const start = path.getPointAtLength(0);
+  // badge at the start of the arrow, label box beside it, thin leader to the badge
+  const bx = s.box[0], by = s.box[1], lw = s.label.length * 10.5 + 22;
+  const lab = el('g', { class: 'lbl' }, g);
+  el('rect', { x: bx, y: by - 15, width: lw, height: 30, rx: 8 }, lab);
+  el('text', { x: bx + 11, y: by + 5 }, lab).textContent = s.label;
+  const mid = path.getPointAtLength(L * 0.5);   // thin leader from the badge to the middle of the thing it numbers
+  el('path', { d: `M${bx - 26} ${by} L${mid.x} ${mid.y}`, stroke: '#14233b', 'stroke-width': 1.5, 'stroke-dasharray': '4 3' }, g);
+  const badge = el('g', { class: 'badge', transform: `translate(${bx - 26} ${by})` }, g);
+  el('circle', { r: 17, fill: s.colour }, badge);
+  el('text', {}, badge).textContent = s.n;
+  // flow beads (shown only while this step is current and drawn)
+  const beads = [0, 1, 2].map(() => el('circle', { r: 5, fill: '#fff', stroke: s.colour, 'stroke-width': 2 }, g));
+  return { s, g, path, maskPath, L, head, beads, start, dur: 0, t0: 0 };
+});
+
+// ---- timeline built from the reading-time rule: 1.0 s to animate, then read the caption ----
+const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+const ANIM = () => (reduce.matches ? 0.001 : 1.0);
+let t0 = 0;
+parts.forEach((p) => { p.t0 = t0; p.dur = ANIM() + Math.max(1.5, readingSeconds(countWords(p.s.text))); t0 += p.dur; });
+const TOTAL = () => parts[parts.length - 1].t0 + parts[parts.length - 1].dur;
+function recompute() { let a = 0; parts.forEach((p) => { p.t0 = a; p.dur = ANIM() + Math.max(1.5, readingSeconds(countWords(p.s.text))); a += p.dur; }); }
+
+let t = 0, playing = true, showAll = false;
+const $ = (id) => document.getElementById(id);
+function currentIndex(time) { let k = 0; parts.forEach((p, i) => { if (time >= p.t0) k = i; }); return k; }
+
+function render() {
+  const idx = showAll ? parts.length - 1 : currentIndex(t);
+  parts.forEach((p, i) => {
+    const started = showAll || t >= p.t0;
+    const prog = showAll ? 1 : smooth((t - p.t0) / ANIM());
+    p.g.style.display = started ? '' : 'none';
+    if (p.s.dashed) p.maskPath.setAttribute('stroke-dashoffset', 1 - prog);
+    else p.path.setAttribute('stroke-dashoffset', 1 - prog);
+    p.head.style.opacity = prog > 0.96 ? 1 : 0;
+    // current step full strength, earlier steps dimmed (not hidden); dimming eases over 0.3 s
+    let o = 1;
+    if (!showAll && i < idx) { const next = parts[i + 1].t0; o = 1 - 0.55 * smooth((t - next) / 0.3); }
+    if (showAll && i < idx) o = 0.55;
+    if (!showAll) o *= smooth((t - p.t0) / 0.25);   // badge, label and arrow fade in over 0.25 s
+    p.g.style.opacity = o;
+    p.beads.forEach((b, k) => {
+      const live = !showAll && i === idx && prog > 0.96 && !reduce.matches;
+      b.style.opacity = live ? 1 : 0;
+      if (live) { const u = ((t * 0.45) + k / 3) % 1; const pt = p.path.getPointAtLength(u * p.L); b.setAttribute('cx', pt.x); b.setAttribute('cy', pt.y); }
+    });
+  });
+  $('caption').textContent = `${parts[idx].s.n}. ${parts[idx].s.text}`;
+  $('play').textContent = playing ? 'Pause' : 'Play';
+  $('play').setAttribute('aria-pressed', String(playing));
+  $('all').setAttribute('aria-pressed', String(showAll));
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;   // capped time step
+  if (playing) { t = Math.min(TOTAL(), t + dt); if (t >= TOTAL()) playing = false; }
+  render();
+  requestAnimationFrame(frame);
+}
+const goto = (i) => { i = clamp(i, 0, parts.length - 1); t = parts[i].t0 + ANIM() + (reduce.matches ? 0 : 0.0); playing = false; showAll = false; };
+$('next').onclick = () => goto(currentIndex(t) + 1);
+$('prev').onclick = () => goto(currentIndex(t) - 1);
+$('play').onclick = () => { if (t >= TOTAL()) t = 0; playing = !playing; showAll = false; };
+$('all').onclick = () => { showAll = !showAll; playing = false; };
+addEventListener('keydown', (e) => { if (e.key === 'ArrowRight') $('next').click(); if (e.key === 'ArrowLeft') $('prev').click(); });
+
+// reduced motion: start paused on a defined still (step 1 complete) and say so
+function applyReduce() {
+  recompute();
+  if (reduce.matches) { playing = false; t = parts[0].t0 + ANIM(); $('note').textContent = 'Motion is paused because your device asks for less movement. Use Next to step through, or Play to watch.'; }
+  else $('note').textContent = 'Each step draws for 1 s, then stays long enough to read (0.6 s + words / 2.5). Earlier steps dim but stay.';
+}
+reduce.addEventListener('change', applyReduce);
+applyReduce();
+
+// test hook: ?t=3.2 shows the picture frozen at 3.2 s; ?t=end the finished picture; ?all=1 every step at once
+const q = new URLSearchParams(location.search);
+if (q.has('t')) { t = q.get('t') === 'end' ? TOTAL() : parseFloat(q.get('t')) || 0; playing = false; }
+if (q.get('all') === '1') { showAll = true; playing = false; }
+window.__ready = true;
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
